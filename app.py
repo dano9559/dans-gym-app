@@ -35,7 +35,7 @@ LIBRARY = {
 # --- APP UI ---
 st.title("💪 Dan's Gym App")
 
-selected_date = st.date_input("Select Date", datetime.today(), format="DD MMM YYYY")
+selected_date = st.date_input("Select Date", datetime.today(), format="MM/DD/YYYY")
 display_date_str = selected_date.strftime("%d %b %Y")
 st.write(f"### Log Date: {display_date_str}")
 
