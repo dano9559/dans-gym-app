@@ -1,28 +1,16 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 from datetime import datetime
+from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(page_title="Dan's Gym App", page_icon="💪", layout="centered")
 
-# --- DATABASE SETUP ---
-def init_db():
-    conn = sqlite3.connect("fitness_notebook.db")
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS gym_logs (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        date TEXT, split TEXT, muscle TEXT, exercise TEXT,
-                        set_num INTEGER, weight REAL, reps INTEGER, effort TEXT,
-                        start_time TEXT, stop_time TEXT, cals REAL)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS cardio_logs (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        date TEXT, start_time TEXT, stop_time TEXT,
-                        mins INTEGER, cals REAL, min_hr INTEGER, avg_hr INTEGER, 
-                        max_hr INTEGER, notes TEXT)''')
-    conn.commit()
-    conn.close()
+# --- SPREADSHEET URL ---
+# Replace the link inside the quotes below with your actual Google Sheet URL
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1dEC9fwCg2U54km08rTJc-ytUQDAj-5r1mwkxf8Ox0Z4/edit?gid=0#gid=0"
 
-init_db()
+# Connect to Google Sheets behind the scenes
+conn = st.connection("gsheets", type=GSheetsConnection)
 
 # --- EXERCISE LIBRARY ---
 LIBRARY = {
@@ -47,7 +35,7 @@ LIBRARY = {
 # --- APP UI ---
 st.title("💪 Dan's Gym App")
 
-selected_date = st.date_input("Select Date", datetime.today(), format="MM/DD/YYYY")
+selected_date = st.date_input("Select Date", datetime.today(), format="DD MMM YYYY")
 display_date_str = selected_date.strftime("%d %b %Y")
 st.write(f"### Log Date: {display_date_str}")
 
@@ -71,8 +59,6 @@ if selected_split in ["Upper Body Focus", "Lower Body Focus", "Core"]:
         df = pd.DataFrame({"Weight": [100.0]*num_sets, "Reps": [12]*num_sets, "Effort": ["Good"]*num_sets})
         
         st.caption("💡 *Tip: Click the '+' at the bottom of the table to add extra sets!*")
-        
-        # The dynamic data editor
         edited = st.data_editor(
             df, 
             key=f"edit_{selected_split}_{muscle}_{ex}", 
@@ -81,14 +67,31 @@ if selected_split in ["Upper Body Focus", "Lower Body Focus", "Core"]:
         )
         
         if st.button(f"Log Entry for {ex}", key=f"btn_{selected_split}_{muscle}"):
-            conn = sqlite3.connect("fitness_notebook.db")
-            # Loop through however many rows exist and automatically number the sets sequentially!
+            # Pull the latest data from the sheet
+            existing_data = conn.read(spreadsheet=SHEET_URL, worksheet="gym_logs", ttl=0).dropna(how="all")
+            
+            # Create new rows from your app grid
+            new_rows_list = []
             for idx, row in edited.iterrows():
-                actual_set_number = idx + 1 
-                conn.execute("INSERT INTO gym_logs VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                             (display_date_str, selected_split, muscle, ex, actual_set_number, row["Weight"], row["Reps"], row["Effort"], start, stop, cals))
-            conn.commit()
-            conn.close()
+                new_rows_list.append({
+                    "date": display_date_str,
+                    "split": selected_split,
+                    "muscle": muscle,
+                    "exercise": ex,
+                    "set_num": idx + 1,
+                    "weight": row["Weight"],
+                    "reps": row["Reps"],
+                    "effort": row["Effort"],
+                    "start_time": start,
+                    "stop_time": stop,
+                    "cals": cals
+                })
+            new_data = pd.DataFrame(new_rows_list)
+            
+            # Combine the old data with the new data and push it back to the sheet
+            updated_data = pd.concat([existing_data, new_data], ignore_index=True)
+            conn.update(spreadsheet=SHEET_URL, worksheet="gym_logs", data=updated_data)
+            
             st.success(f"Logged {ex}!")
 
 # --- CARDIO LOGIC ---
@@ -105,25 +108,32 @@ elif selected_split == "Cardio Day Only":
     notes = st.text_area("Notes")
     
     if st.button("Log Cardio Entry"):
-        conn = sqlite3.connect("fitness_notebook.db")
-        conn.execute("INSERT INTO cardio_logs VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)", 
-                     (display_date_str, start, stop, mins, cals, min_hr, avg_hr, max_hr, notes))
-        conn.commit()
-        conn.close()
+        existing_data = conn.read(spreadsheet=SHEET_URL, worksheet="cardio_logs", ttl=0).dropna(how="all")
+        new_data = pd.DataFrame([{
+            "date": display_date_str,
+            "start_time": start,
+            "stop_time": stop,
+            "mins": mins,
+            "cals": cals,
+            "min_hr": min_hr,
+            "avg_hr": avg_hr,
+            "max_hr": max_hr,
+            "notes": notes
+        }])
+        updated_data = pd.concat([existing_data, new_data], ignore_index=True)
+        conn.update(spreadsheet=SHEET_URL, worksheet="cardio_logs", data=updated_data)
         st.success("Cardio Logged!")
 
 # --- HISTORY VIEWER ---
 st.markdown("---")
 if st.checkbox("Expand History Viewer"):
-    conn = sqlite3.connect("fitness_notebook.db")
     st.write("### Lifting History")
     try:
-        st.dataframe(pd.read_sql("SELECT * FROM gym_logs ORDER BY id DESC", conn))
+        st.dataframe(conn.read(spreadsheet=SHEET_URL, worksheet="gym_logs", ttl=0).dropna(how="all"))
     except:
-        st.info("No lifting data.")
+        st.info("No lifting data or connection error.")
     st.write("### Cardio History")
     try:
-        st.dataframe(pd.read_sql("SELECT * FROM cardio_logs ORDER BY id DESC", conn))
+        st.dataframe(conn.read(spreadsheet=SHEET_URL, worksheet="cardio_logs", ttl=0).dropna(how="all"))
     except:
-        st.info("No cardio data.")
-    conn.close()
+        st.info("No cardio data or connection error.")
